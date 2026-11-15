@@ -5,6 +5,7 @@
 
 - الصفحة: **لجنة المشاركة المحلية لبريد تبسة**
 - `Page ID`: `1418255570212031`
+- الخدمة الحية: https://cplaptebessa.onrender.com
 - الاستضافة: Render.com (مجاني) — الذكاء الاصطناعي: Google Gemini (مجاني)
 
 ## كيف يعمل
@@ -60,6 +61,8 @@ python ingest.py
 | `VERIFY_TOKEN` | ✅ | `barid_tebessa_verify_token_2026` (أو نص تختاره) |
 | `PAGE_NAME` | — | `لجنة المشاركة المحلية لبريد تبسة` |
 | `GEMINI_MODEL` | — | `gemini-3.5-flash` |
+| `OCR_MODEL` | — | `gemini-3.5-flash-lite` (للقراءة البصرية) |
+| `GEMINI_FALLBACK_MODELS` | — | قائمة موديلات بديلة عند نفاد الحصة اليومية |
 | `KB_MIN_COVERAGE` | — | `0.55` (حد ثقة الاسترجاع) |
 | `PDF_OCR` | — | `1` لتفعيل قراءة PDF الممسوح |
 | `PDF_OCR_MAX_PAGES` | — | `30` |
@@ -81,10 +84,11 @@ python ingest.py
 2. اربط الصفحة (`1418255570212031`) وولّد **Page Access Token دائم**
    بصلاحيات `pages_messaging` + `pages_manage_metadata` + `pages_read_engagement`.
 3. Messenger ← Webhooks:
-   - Callback URL: `https://<خدمتك>.onrender.com/webhook`
+   - Callback URL: `https://cplaptebessa.onrender.com/webhook`
    - Verify Token: نفس `VERIFY_TOKEN`
    - اشترك في `messages` و`messaging_postbacks`.
 
+> الحصة المجانية من Gemini محدودة (20 طلباً/يوم لكل موديل)؛ الكود ينتقل تلقائياً بين موديلات بديلة. للاستخدام المكثف فعّل الفوترة.
 > في وضع Development يرد البوت على مدراء التطبيق فقط.
 > للجمهور تحتاج App Review للصلاحيات ثم التحويل إلى Live.
 
@@ -96,7 +100,7 @@ Integrations ← Messenger ← Connect ثم ارفع نفس الوثائق إل�
 
 - لا تضع أي مفتاح في الكود أو الريبو — فقط `.env` محلياً أو Secrets/Env.
 - الصفحة رسمية: لا تنشر محتوى آلياً غير مُراجع بشرياً.
-- الوثائق قد تحتوي بيانات عمال: أبقِ الريبو **Private**.
+- الريبو **عام** حالياً لأن Render المجاني يسحب الكود من رابط عام. الموجود فيه وثائق رسمية/نماذج فارغة فقط — لا ترفع أي بيانات شخصية للعمال.
 - `/stats` يعرض التفاصيل فقط عند تمرير `?key=VERIFY_TOKEN`.
 
 ## ✅ فحوصات

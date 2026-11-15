@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -191,13 +192,39 @@ def _generate_answer(question: str, hits: list[dict]) -> str:
     )
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": 700, "temperature": 0.15},
+        "generationConfig": {
+            "maxOutputTokens": 700,
+            "temperature": 0.15,
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
     }
-    res = requests.post(
-        url, json=payload, headers={"x-goog-api-key": GEMINI_API_KEY}, timeout=60
-    )
-    res.raise_for_status()
-    data = res.json()
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            res = requests.post(
+                url,
+                json=payload,
+                headers={"x-goog-api-key": GEMINI_API_KEY},
+                timeout=60,
+            )
+            if res.status_code == 429 and attempt < 2:
+                retry_after = res.headers.get("Retry-After", "")
+                delay = 2.0 * (attempt + 1)
+                if retry_after.isdigit():
+                    delay = min(float(retry_after), 8.0)
+                log.warning("تجاوز حد الطلبات — إعادة المحاولة بعد %.1fs", delay)
+                time.sleep(delay)
+                continue
+            res.raise_for_status()
+            data = res.json()
+            break
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt == 2:
+                raise
+            time.sleep(2.0 * (attempt + 1))
+    else:
+        raise RuntimeError(f"فشل الاتصال بـ Gemini: {last_error}")
     try:
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except (KeyError, IndexError) as exc:

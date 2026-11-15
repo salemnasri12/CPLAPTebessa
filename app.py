@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -43,7 +42,6 @@ PAGE_NAME = os.environ.get("PAGE_NAME", "لجنة المشاركة المحلي�
 PAGE_ACCESS_TOKEN = os.environ.get("FACEBOOK_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "barid_tebessa_verify_token")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 GRAPH_VERSION = os.environ.get("FB_GRAPH_VERSION", "v21.0")
 MIN_COVERAGE = float(os.environ.get("KB_MIN_COVERAGE", "0.55"))
 LEADS_PATH = Path(os.environ.get("LEADS_PATH", "data/leads.jsonl"))
@@ -186,49 +184,12 @@ def _generate_answer(question: str, hits: list[dict]) -> str:
         f"إن كانت المقاطع لا تحتوي الإجابة فاكتب فقط: INSUFFICIENT_INFORMATION"
     )
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent"
+    return knowledge.gemini_generate(
+        [{"text": prompt}],
+        max_tokens=700,
+        temperature=0.15,
+        label="answer",
     )
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "maxOutputTokens": 700,
-            "temperature": 0.15,
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
-    }
-    last_error: Exception | None = None
-    for attempt in range(3):
-        try:
-            res = requests.post(
-                url,
-                json=payload,
-                headers={"x-goog-api-key": GEMINI_API_KEY},
-                timeout=60,
-            )
-            if res.status_code == 429 and attempt < 2:
-                retry_after = res.headers.get("Retry-After", "")
-                delay = 2.0 * (attempt + 1)
-                if retry_after.isdigit():
-                    delay = min(float(retry_after), 8.0)
-                log.warning("تجاوز حد الطلبات — إعادة المحاولة بعد %.1fs", delay)
-                time.sleep(delay)
-                continue
-            res.raise_for_status()
-            data = res.json()
-            break
-        except requests.RequestException as exc:
-            last_error = exc
-            if attempt == 2:
-                raise
-            time.sleep(2.0 * (attempt + 1))
-    else:
-        raise RuntimeError(f"فشل الاتصال بـ Gemini: {last_error}")
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except (KeyError, IndexError) as exc:
-        raise RuntimeError(f"رد غير متوقع من Gemini: {data}") from exc
 
 
 def _send_messenger(sender_id: str, text: str) -> None:

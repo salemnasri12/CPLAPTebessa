@@ -52,6 +52,16 @@ REFERENCE_DIR = Path(os.environ.get("REFERENCE_DIR", str(BASE_DIR / "reference")
 INDEX_PATH = Path(os.environ.get("KB_INDEX", str(BASE_DIR / "knowledge_index.json")))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+OCR_MODEL = os.environ.get("OCR_MODEL", "gemini-3.5-flash-lite")
+GEMINI_FALLBACK_MODELS = [
+    name.strip()
+    for name in os.environ.get(
+        "GEMINI_FALLBACK_MODELS",
+        "gemini-3.5-flash-lite,gemini-3.1-flash-lite,"
+        "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash",
+    ).split(",")
+    if name.strip()
+]
 
 TEXT_EXT = {".txt", ".md", ".csv", ".json", ".html", ".htm"}
 PDF_EXT = {".pdf"}
@@ -218,7 +228,7 @@ def _render_and_ocr_pdf(path: Path, page_numbers: list[int]) -> dict[int, str]:
                 log.info("قراءة بصرية ناجحة: %s صفحة %d", path.name, number)
             except Exception as exc:  # noqa: BLE001
                 log.warning("فشل OCR لصفحة %d في %s: %s", number, path.name, exc)
-            time.sleep(1.5)
+            time.sleep(10)
     finally:
         document.close()
     return results
@@ -242,42 +252,94 @@ def _gemini_ocr(path: Path) -> str:
     return _gemini_ocr_bytes(path.read_bytes(), mime, path.name)
 
 
+def gemini_generate(
+    parts: list[dict],
+    *,
+    max_tokens: int,
+    temperature: float = 0.15,
+    model: str | None = None,
+    label: str = "gemini",
+) -> str:
+    """يولّد نصاً عبر Gemini، وينتقل تلقائياً لموديل بديل عند نفاد الحصة اليومية."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY غير مضبوط")
+
+    chain: list[str] = []
+    for candidate in [model, GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]:
+        if candidate and candidate not in chain:
+            chain.append(candidate)
+
+    last_error: Exception | None = None
+    for name in chain:
+        for thinking in (0, None):
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{name}:generateContent"
+            )
+            config: dict = {
+                "maxOutputTokens": max_tokens,
+                "temperature": temperature,
+            }
+            if thinking == 0:
+                config["thinkingConfig"] = {"thinkingBudget": 0}
+            payload = {"contents": [{"parts": parts}], "generationConfig": config}
+            try:
+                res = requests.post(
+                    url,
+                    json=payload,
+                    headers={"x-goog-api-key": GEMINI_API_KEY},
+                    timeout=180,
+                )
+            except requests.RequestException as exc:
+                last_error = exc
+                break
+            if res.status_code == 400 and thinking == 0:
+                continue
+            if res.status_code in (404, 429, 503):
+                last_error = RuntimeError(
+                    f"{name}: {res.status_code} {res.text[:160]}"
+                )
+                log.warning(
+                    "الموديل %s غير متاح (%s) — تجربة الموديل التالي",
+                    name,
+                    res.status_code,
+                )
+                break
+            res.raise_for_status()
+            data = res.json()
+            try:
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            except (KeyError, IndexError) as exc:
+                raise RuntimeError(
+                    f"رد غير متوقع من Gemini ({label}): {data}"
+                ) from exc
+
+    raise RuntimeError(f"فشل توليد النص عبر Gemini ({label}): {last_error}")
+
+
 def _gemini_ocr_bytes(data: bytes, mime: str, label: str) -> str:
     """قراءة بصرية لأي صورة (ملف صورة أو صفحة PDF مرسومة)."""
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY غير مضبوط — لا يمكن قراءة الصور")
     encoded = base64.b64encode(data).decode("ascii")
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent"
+    parts = [
+        {
+            "text": (
+                "استخرج كل النصوص الظاهرة في هذه الصورة كما هي دون أي تعليق "
+                "أو إضافة. حافظ على ترتيب الأسطر والعناوين والجداول، "
+                "وبنفس لغة الوثيقة (عربية/فرنسية). "
+                "إذا لم توجد نصوص اكتب: لا يوجد نص."
+            )
+        },
+        {"inline_data": {"mime_type": mime, "data": encoded}},
+    ]
+    text = gemini_generate(
+        parts,
+        max_tokens=MAX_OCR_TOKENS,
+        temperature=0,
+        model=OCR_MODEL,
+        label=label,
     )
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": (
-                            "استخرج كل النصوص الظاهرة في هذه الصورة كما هي دون أي تعليق "
-                            "أو إضافة. حافظ على ترتيب الأسطر والعناوين والجداول، "
-                            "وبنفس لغة الوثيقة (عربية/فرنسية). "
-                            "إذا لم توجد نصوص اكتب: لا يوجد نص."
-                        )
-                    },
-                    {"inline_data": {"mime_type": mime, "data": encoded}},
-                ]
-            }
-        ],
-        "generationConfig": {"maxOutputTokens": MAX_OCR_TOKENS, "temperature": 0},
-    }
-    res = requests.post(
-        url, json=payload, headers={"x-goog-api-key": GEMINI_API_KEY}, timeout=180
-    )
-    res.raise_for_status()
-    data_json = res.json()
-    try:
-        text = data_json["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except (KeyError, IndexError) as exc:
-        raise RuntimeError(f"رد غير متوقع من Gemini للصورة {label}: {data_json}") from exc
     return re.sub(r"^\s*لا يوجد نص\.?\s*$", "", text)
 
 

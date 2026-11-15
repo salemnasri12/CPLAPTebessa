@@ -1,0 +1,24 @@
+# Render.com free deployment — المساعد الإداري لبريد تبسة
+services:
+  - type: web
+    name: barid-tebessa-bot
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt && python ingest.py"
+    startCommand: "uvicorn app:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /health
+    envVars:
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash
+      - key: FB_GRAPH_VERSION
+        value: v21.0
+      - key: PAGE_NAME
+        value: لجنة المشاركة المحلية لبريد تبسة
+      - key: KB_MIN_COVERAGE
+        value: "0.55"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FACEBOOK_ACCESS_TOKEN
+        sync: false
+      - key: VERIFY_TOKEN
+        sync: false

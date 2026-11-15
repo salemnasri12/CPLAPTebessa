@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import io
@@ -386,6 +387,7 @@ def build_index(reference_dir: Path = REFERENCE_DIR, index_path: Path = INDEX_PA
             log.warning("فشل استخراج %s: %s", rel, exc)
             errors.append({"source": rel, "error": str(exc)})
             continue
+        source_tokens = tokenize(Path(rel).stem)
         count = 0
         for text, locator in segments:
             for piece in chunk_text(text):
@@ -394,7 +396,7 @@ def build_index(reference_dir: Path = REFERENCE_DIR, index_path: Path = INDEX_PA
                         "source": rel,
                         "locator": locator,
                         "text": piece,
-                        "tokens": tokenize(piece),
+                        "tokens": tokenize(piece) + source_tokens,
                     }
                 )
                 count += 1
@@ -406,10 +408,18 @@ def build_index(reference_dir: Path = REFERENCE_DIR, index_path: Path = INDEX_PA
         for token in set(chunk["tokens"]):
             df[token] = df.get(token, 0) + 1
 
+    fingerprint = {
+        str(path.relative_to(reference_dir)): hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+        for path in files
+    }
+
     index = {
         "built_at": datetime.now(timezone.utc).isoformat(),
         "model": GEMINI_MODEL,
         "reference_dir": str(reference_dir),
+        "fingerprint": fingerprint,
         "sources": sources,
         "errors": errors,
         "chunk_count": len(chunks),
@@ -434,15 +444,16 @@ def index_is_stale(reference_dir: Path = REFERENCE_DIR, index_path: Path = INDEX
     index = load_index(index_path)
     if not index:
         return True
-    try:
-        built_at = datetime.fromisoformat(index["built_at"])
-    except (KeyError, ValueError):
+    stored = index.get("fingerprint")
+    if not stored:
         return True
-    for path in iter_reference_files(reference_dir):
-        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-        if mtime > built_at:
-            return True
-    return False
+    current = {
+        str(path.relative_to(reference_dir)): hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+        for path in iter_reference_files(reference_dir)
+    }
+    return stored != current
 
 
 def ensure_index(
@@ -464,15 +475,14 @@ def select_context(
 ) -> list[dict]:
     """يختار المقاطع التي يراها النموذج.
 
-    - مطابقة قوية → أفضل المقاطع.
+    - أفضل المقاطع دائماً (النموذج ملزم برفض الإجابة إن لم يجد المعلومة).
     - مجموعة وثائق صغيرة (≤ small_corpus) → يمرّر الجميع ليحكم النموذج بنفسه.
-    - خلاف ذلك → لا سياق (تحويل بشري بدل التخمين).
     """
     if not index or not index.get("chunks"):
         return []
 
     hits = retrieve(query, index, top_k)
-    if hits and hits[0]["coverage"] >= min_coverage:
+    if hits:
         return hits
 
     chunks = index["chunks"]
@@ -502,12 +512,21 @@ def retrieve(query: str, index: dict | None, top_k: int = 5) -> list[dict]:
     """BM25 للترتيب + معيار تغطية الكلمات للثقة (يعمل حتى مع مستند واحد)."""
     if not index or not index.get("chunks"):
         return []
-    query_tokens = list(dict.fromkeys(tokenize(query)))
+    df = index.get("df", {})
+    query_tokens: list[str] = []
+    for token in tokenize(query):
+        if token not in df and len(token) > 3:
+            for prefix in ("ل", "ب", "ك", "و", "ف"):
+                stem = token[1:]
+                if token.startswith(prefix) and len(stem) >= 3 and stem in df:
+                    token = stem
+                    break
+        if token not in query_tokens:
+            query_tokens.append(token)
     if not query_tokens:
         return []
 
     chunks = index["chunks"]
-    df = index.get("df", {})
     total = len(chunks)
     avg_len = index.get("avg_len") or (
         sum(len(c["tokens"]) for c in chunks) / total if total else 1

@@ -126,6 +126,12 @@ def decide(psid: str, status: str, note: str = "") -> bool:
         return cur.rowcount > 0
 
 
+def delete(psid: str) -> bool:
+    with _lock, _connect() as conn:
+        cur = conn.execute("DELETE FROM registrations WHERE psid = ?", (psid,))
+        return cur.rowcount > 0
+
+
 def list_all(status: str | None = None) -> list[dict]:
     query = "SELECT * FROM registrations"
     params: tuple = ()

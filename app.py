@@ -576,6 +576,12 @@ def _admin_page(key: str, status: str) -> str:
             f'name="psid" value="{html.escape(row["psid"])}">'
             '<input type="hidden" name="action" value="reject">'
             '<button type="submit" class="danger">رفض</button></form>'
+            f'<form method="post" action="/admin/decision" '
+            f"onsubmit=\"return confirm('حذف هذا التسجيل نهائياً؟')\">"
+            f'<input type="hidden" name="key" value="{html.escape(key)}">'
+            f'<input type="hidden" name="psid" value="{html.escape(row["psid"])}">'
+            '<input type="hidden" name="action" value="delete">'
+            '<button type="submit" class="danger">حذف</button></form>'
             "</div></td></tr>"
         )
     table = (
@@ -719,6 +725,9 @@ async def admin_decision(
 ):
     if not _admin_key_ok(key):
         return HTMLResponse("<h1>403</h1>", status_code=403)
+    if action == "delete":
+        registry.delete(psid)
+        return RedirectResponse(f"/admin?key={key}", status_code=303)
     status = {"approve": "approved", "reject": "rejected"}.get(action)
     if not status or not registry.decide(psid, status):
         return HTMLResponse(

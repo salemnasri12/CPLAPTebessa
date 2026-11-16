@@ -6,6 +6,8 @@
 - الصفحة: **لجنة المشاركة المحلية لبريد تبسة**
 - `Page ID`: `1418255570212031`
 - الخدمة الحية: https://cplaptebessa.onrender.com
+- **محادثة الويب** (تعمل الآن دون انتظار توكن فيسبوك):
+  https://cplaptebessa.onrender.com/chat
 - الاستضافة: Render.com (مجاني) — الذكاء الاصطناعي: Google Gemini (مجاني)
 
 ## كيف يعمل
@@ -28,6 +30,9 @@
 3. يتحقق أحد أعضاء اللجنة من البيانات من لوحة الإدارة:
    `https://cplaptebessa.onrender.com/admin?key=VERIFY_TOKEN`.
 4. بعد الموافقة تُفعَّل المراسلة ويستمر البوت في الإجابة عن كل الأسئلة.
+
+> **المحادثة تعمل الآن عبر الموقع** (`/chat`) بنفس قاعدة المعرفة والتسجيل،
+> حتى قبل الحصول على توكن فيسبوك. بعد إضافة التوكن سيعمل ماسنجر أيضاً.
 
 ## 📁 الملفات
 
@@ -85,6 +90,7 @@ python ingest.py
 | `REGISTRY_PATH` | — | `data/registry.db` (ملف قاعدة التسجيلات) |
 | `REGISTRY_SECRET` | — | سر توقيع روابط التسجيل (افتراضياً `VERIFY_TOKEN`) |
 | `ADMIN_KEY` | — | مفتاح لوحة الإدارة (افتراضياً `VERIFY_TOKEN`) |
+| `COOKIE_SECURE` | — | `1`/`0` لفرض كوكيز آمنة (يُكتشف تلقائياً من HTTPS) |
 
 ### 4) Render
 - Build Command:
@@ -132,6 +138,7 @@ Integrations ← Messenger ← Connect ثم ارفع نفس الوثائق إل�
 | `/health` | `ok` |
 | `/stats` | عدد المقاطع والملفات |
 | `/` و`/register` | صفحة تسجيل بيانات العامل |
+| `/chat` | محادثة ويب بعد التحقق من التسجيل |
 | `/admin?key=VERIFY_TOKEN` | لوحة التحقق (موافقة/رفض + تصدير CSV) |
 | `/webhook?hub.mode=subscribe&hub.verify_token=...&hub.challenge=123` | `123` |
 

@@ -36,7 +36,12 @@ from pathlib import Path
 
 import requests
 from fastapi import FastAPI, Form, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 
 import knowledge
 import registry
@@ -263,45 +268,43 @@ def _send_action(sender_id: str, action: str) -> None:
         log.debug("sender_action %s فشل: %s", action, exc)
 
 
-def _answer(sender_id: str, text: str) -> None:
-    """يولّد الرد المناسب ويرسله، مع توجيه الطلب إلى اللجنة عند الحاجة."""
+def _answer_text(sender_id: str, text: str) -> str:
+    """يولّد نص الرد المناسب دون إرساله (يُستخدم في ماسنجر وصفحة المحادثة)."""
     if _wants_human(text):
         _log_lead(sender_id, text, "طلب توجيه إلى اللجنة")
-        _send_messenger(sender_id, HANDOFF_REPLY)
-        return
+        return HANDOFF_REPLY
 
     if _is_greeting(text):
-        _send_messenger(sender_id, GREETING_REPLY)
-        return
+        return GREETING_REPLY
 
     if not INDEX or not INDEX.get("chunks"):
-        _send_messenger(sender_id, NO_DOCS_REPLY)
-        return
+        return NO_DOCS_REPLY
 
     hits = knowledge.select_context(text, INDEX, min_coverage=MIN_COVERAGE)
     if not hits:
         _log_lead(sender_id, text, "لا توجد إجابة في الوثائق")
-        _send_messenger(sender_id, ESCALATION_REPLY)
-        return
+        return ESCALATION_REPLY
 
     try:
         answer = _generate_answer(text, hits)
     except Exception:  # noqa: BLE001
         log.exception("فشل توليد الإجابة")
         _log_lead(sender_id, text, "خطأ تقني في التوليد")
-        _send_messenger(
-            sender_id,
+        return (
             "أعتذر، حدث عطل تقني مؤقت أثناء معالجة طلبك. "
-            "يرجى إعادة إرسال السؤال بعد قليل، أو ترك استفسارك وسنعاود التواصل معك.",
+            "يرجى إعادة إرسال السؤال بعد قليل، أو ترك استفسارك وسنعاود التواصل معك."
         )
-        return
 
     if "INSUFFICIENT_INFORMATION" in answer:
         _log_lead(sender_id, text, "النموذج لم يجد إجابة في المقاطع")
-        _send_messenger(sender_id, ESCALATION_REPLY)
-        return
+        return ESCALATION_REPLY
 
-    for part in _split_message(answer):
+    return answer
+
+
+def _answer(sender_id: str, text: str) -> None:
+    """يرسل الرد المناسب عبر ماسنجر، مع توجيه الطلب إلى اللجنة عند الحاجة."""
+    for part in _split_message(_answer_text(sender_id, text)):
         _send_messenger(sender_id, part)
 
 
@@ -342,7 +345,20 @@ button.danger{background:#a02020}
 .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 18px}
 .tabs a{text-decoration:none;color:var(--ink);background:#eef2f0;padding:7px 14px;border-radius:999px;font-size:13px}
 .tabs a.active{background:var(--green);color:#fff}
-@media(max-width:520px){main{margin-top:-20px}.card{padding:18px}table{font-size:13px}}
+.chat{background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(11,107,58,.08)}
+.chat-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);background:#fbfcfb}
+.chat-head .who{font-weight:700;font-size:14px}
+.chat-head .who span{display:block;font-weight:400;font-size:12px;color:var(--muted)}
+.chat-head a{font-size:13px;color:var(--muted)}
+.chat-body{height:52vh;min-height:320px;max-height:540px;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;background:#f7faf8}
+.msg{max-width:86%;padding:10px 14px;border-radius:14px;font-size:14.5px;white-space:pre-wrap;overflow-wrap:anywhere}
+.msg.user{align-self:flex-start;background:var(--green);color:#fff;border-bottom-right-radius:4px}
+.msg.bot{align-self:flex-end;background:#fff;border:1px solid var(--line);border-bottom-left-radius:4px}
+.composer{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line);background:#fff}
+.composer input{margin:0}
+.composer button{width:auto;margin:0;padding:12px 20px;flex:0 0 auto}
+.hint{font-size:12px;color:var(--muted);text-align:center;padding:0 12px 10px}
+@media(max-width:520px){main{margin-top:-20px}.card{padding:18px}table{font-size:13px}.chat-body{height:58vh}}
 """
 
 
@@ -385,7 +401,9 @@ def _register_form(token: str, error: str = "") -> str:
         '<input id="workplace" name="workplace" maxlength="120" required>'
         '<button type="submit">إرسال البيانات</button></form>'
         '<p class="note">لا تشارك أي بيانات حساسة مثل كلمات المرور أو أرقام '
-        "الحسابات البريدية.</p></div>",
+        "الحسابات البريدية.</p>"
+        '<p class="note">لديك حساب مُتحقَّق؟ '
+        '<a href="/chat">الدخول إلى المحادثة</a></p></div>',
     )
 
 
@@ -394,7 +412,7 @@ def _register_success(linked: bool) -> str:
         f'<p class="note">عُد إلى ماسنجر عبر الرابط: '
         f'<a href="https://m.me/{PAGE_ID}">m.me/{PAGE_ID}</a></p>'
         if linked
-        else ""
+        else '<p class="note"><a href="/chat">متابعة إلى المحادثة</a></p>'
     )
     return _layout(
         "تم التسجيل",
@@ -404,6 +422,108 @@ def _register_success(linked: bool) -> str:
         "سيتم تفعيل المراسلة فور التحقق من البيانات.</p>"
         f"{extra}</div>",
     )
+
+
+COOKIE_NAME = "cpl_session"
+
+
+def _cookie_secure(request: Request) -> bool:
+    override = os.environ.get("COOKIE_SECURE")
+    if override is not None:
+        return override == "1"
+    return request.url.scheme == "https"
+
+
+def _session_psid(request: Request) -> str | None:
+    token = request.cookies.get(COOKIE_NAME)
+    return registry.unsign(token) if token else None
+
+
+def _chat_placeholder(row: dict) -> str:
+    name = f"{html.escape(row['first_name'])} {html.escape(row['last_name'])}"
+    if row["status"] == "rejected":
+        message = (
+            "تعذّر التحقق من بياناتك. يُرجى تعديل البيانات وإعادة إرسالها "
+            "ليتمكن أعضاء اللجنة من مراجعتها."
+        )
+    else:
+        message = (
+            "بياناتك مسجّلة وهي قيد المراجعة من طرف أعضاء اللجنة. "
+            "سيتم تفعيل المحادثة فور التحقق منها."
+        )
+    return _layout(
+        "المحادثة",
+        '<div class="card"><h2>المحادثة غير مفعّلة بعد</h2>'
+        f"<p>مرحباً {name}، {message}</p>"
+        '<p class="note"><a href="/chat">تحديث الحالة</a> — '
+        '<a href="/register">تعديل البيانات</a></p></div>',
+    )
+
+
+CHAT_HTML = (
+    '<div class="chat">'
+    '<div class="chat-head"><div class="who">__NAME__<span>__META__</span></div>'
+    '<a href="/logout">خروج</a></div>'
+    '<div class="chat-body" id="chat-body">'
+    '<div class="msg bot">مرحباً بك. اطرح استفسارك وسأجيب اعتماداً على '
+    "وثائق اللجنة الرسمية.</div></div>"
+    '<form class="composer" id="chat-form">'
+    '<input id="chat-input" placeholder="اكتب رسالتك هنا..." maxlength="1000" '
+    'autocomplete="off" required>'
+    '<button type="submit">إرسال</button></form>'
+    '<div class="hint">الردود مستندة إلى وثائق اللجنة فقط. '
+    "للاستفسارات غير المتوفرة سيُسجَّل طلبك لتوجيهه إلى أعضاء اللجنة.</div>"
+    "</div>"
+)
+
+CHAT_JS = """
+<script>
+(function(){
+  var body=document.getElementById('chat-body');
+  var form=document.getElementById('chat-form');
+  var input=document.getElementById('chat-input');
+  function add(text,cls){
+    var d=document.createElement('div');
+    d.className='msg '+cls;
+    d.textContent=text;
+    body.appendChild(d);
+    body.scrollTop=body.scrollHeight;
+    return d;
+  }
+  form.addEventListener('submit',function(e){
+    e.preventDefault();
+    var text=input.value.trim();
+    if(!text) return;
+    add(text,'user');
+    input.value='';
+    input.focus();
+    var pending=add('...','bot');
+    pending.style.opacity='0.55';
+    fetch('/api/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:text})
+    }).then(function(r){ return r.json().then(function(d){ return {ok:r.ok,data:d}; }); })
+      .then(function(res){
+        pending.remove();
+        var d=res.data||{};
+        if(res.ok){ add(d.reply||'تعذر الحصول على رد.', 'bot'); }
+        else if(d.error==='pending'){ add('بياناتك ما زالت قيد المراجعة.\\nيمكنك تحديث الصفحة لاحقاً.', 'bot'); }
+        else if(d.error==='register'){ add('انتهت الجلسة. يرجى إعادة التسجيل من الصفحة الرئيسية.', 'bot'); }
+        else { add('تعذر معالجة الرسالة. حاول مجدداً.', 'bot'); }
+      })
+      .catch(function(){ pending.remove(); add('تعذر الاتصال بالخادم. تحقق من الشبكة وحاول مجدداً.', 'bot'); });
+  });
+})();
+</script>
+"""
+
+
+def _chat_page(row: dict) -> str:
+    name = f"{html.escape(row['first_name'])} {html.escape(row['last_name'])}"
+    meta = f"{html.escape(row['grade'])} — {html.escape(row['workplace'])}"
+    body = CHAT_HTML.replace("__NAME__", name).replace("__META__", meta)
+    return _layout("المحادثة", body + CHAT_JS)
 
 
 def _admin_key_ok(key: str) -> bool:
@@ -482,7 +602,10 @@ def _admin_page(key: str, status: str) -> str:
 
 # --------------------------------------------------------------------- المسارات
 @app.get("/", response_class=HTMLResponse)
-async def home(t: str = ""):
+async def home(request: Request, t: str = ""):
+    psid = _session_psid(request)
+    if psid and not t and registry.is_approved(psid):
+        return RedirectResponse("/chat", status_code=302)
     return _register_form(t)
 
 
@@ -493,6 +616,7 @@ async def register_page(t: str = ""):
 
 @app.post("/register", response_class=HTMLResponse)
 async def register_submit(
+    request: Request,
     first_name: str = Form(""),
     last_name: str = Form(""),
     grade: str = Form(""),
@@ -515,7 +639,69 @@ async def register_submit(
                                 "أعد فتح الرابط من ماسنجر.")
     registry.register(psid, first_name, last_name, grade, workplace)
     log.info("تسجيل جديد: %s %s (%s)", first_name, last_name, psid[:12])
-    return _register_success(linked=bool(psid and not psid.startswith("web-")))
+    response = HTMLResponse(
+        _register_success(linked=bool(psid and not psid.startswith("web-")))
+    )
+    response.set_cookie(
+        COOKIE_NAME,
+        registry.sign(psid),
+        max_age=60 * 60 * 24 * 30,
+        httponly=True,
+        samesite="lax",
+        secure=_cookie_secure(request),
+    )
+    return response
+
+
+@app.get("/chat", response_class=HTMLResponse)
+async def chat_page(request: Request):
+    psid = _session_psid(request)
+    if not psid:
+        return _register_form("", "سجّل بياناتك أولاً لبدء المحادثة.")
+    row = registry.get(psid)
+    if not row:
+        return RedirectResponse("/register", status_code=302)
+    if row["status"] != "approved":
+        return _chat_placeholder(row)
+    return _chat_page(row)
+
+
+@app.get("/logout")
+async def logout():
+    response = RedirectResponse("/", status_code=302)
+    response.delete_cookie(COOKIE_NAME)
+    return response
+
+
+@app.post("/api/chat")
+async def chat_api(request: Request):
+    psid = _session_psid(request)
+    if not psid:
+        return JSONResponse({"error": "register"}, status_code=403)
+    try:
+        row = registry.get(psid)
+    except Exception:  # noqa: BLE001
+        log.exception("تعذر قراءة سجل التسجيل")
+        return JSONResponse({"error": "unavailable"}, status_code=503)
+    if not row:
+        return JSONResponse({"error": "register"}, status_code=403)
+    if row["status"] != "approved":
+        return JSONResponse({"error": "pending"}, status_code=403)
+
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"error": "invalid"}, status_code=400)
+    text = str(data.get("message") or "").strip()[:1000]
+    if not text:
+        return JSONResponse({"error": "empty"}, status_code=400)
+
+    if not GEMINI_API_KEY or not INDEX or not INDEX.get("chunks"):
+        return {"reply": NO_DOCS_REPLY}
+
+    log.info("محادثة ويب من %s: %s", psid[:12], text[:200])
+    reply = await asyncio.to_thread(_answer_text, psid, text)
+    return {"reply": reply}
 
 
 @app.get("/admin", response_class=HTMLResponse)

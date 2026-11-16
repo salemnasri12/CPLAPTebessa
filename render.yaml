@@ -4,7 +4,7 @@ services:
     name: barid-tebessa-bot
     runtime: python
     plan: free
-    buildCommand: "pip install -r requirements.txt && python ingest.py"
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "uvicorn app:app --host 0.0.0.0 --port $PORT"
     healthCheckPath: /health
     envVars:
@@ -20,6 +20,12 @@ services:
         value: لجنة المشاركة المحلية لبريد تبسة
       - key: KB_MIN_COVERAGE
         value: "0.55"
+      - key: PUBLIC_BASE_URL
+        value: https://cplaptebessa.onrender.com
+      - key: REQUIRE_REGISTRATION
+        value: "1"
+      - key: REGISTRY_PATH
+        value: data/registry.db
       - key: GEMINI_API_KEY
         sync: false
       - key: FACEBOOK_ACCESS_TOKEN
